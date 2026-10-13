@@ -32,7 +32,7 @@ const PACKS_ONE_PIECE = [
   { start: 401, end: 500, infoHash: "E1BAEAB42BA30FCFD0095462757885046B892DE5" },
   { start: 501, end: 600, infoHash: "1905E121F050EC114861EBCE852BF875DC1F5C99" },
   { start: 601, end: 650, infoHash: "ADA74247D502AD771FF469DEF10A8AAA9B15B41B" },
-  { start: 651, end: 700, infoHash: "C8DD221A1792F7DEA8417F12DB753E90C9E05B09" }
+  { start: 651, end: 700, infoHash: "C8DD221A1792F7DEA8417F12DB753E90C9E05B09" },
 
   // Nouveau pack Nyaa (ex. 93 à 130) :
   { start: 93,  end: 130, infoHash: "cbdd80c1b2251e471a30408402afae7bdaf0c554", sourceName: "Nyaa VF" }
