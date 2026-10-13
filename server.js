@@ -6,7 +6,7 @@ app.use(cors());
 
 const manifest = {
   id: "community.perso.torrents",
-  version: "1.0.1",
+  version: "1.0.2",
   name: "Catalogue Perso",
   description: "Lecture directe des torrents sans debrid",
   resources: ["stream"],
@@ -14,27 +14,29 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// Liste des trackers BitTorrent publics pour trouver les seeders immédiatement
+// Liste des trackers BitTorrent publics
 const DEFAULT_TRACKERS = [
   "tracker:udp://tracker.opentrackr.org:1337/announce",
   "tracker:udp://open.demonii.com:1337/announce",
   "tracker:udp://open.stealth.si:80/announce",
   "tracker:udp://tracker.torrent.eu.org:451/announce",
+  "tracker:http://nyaa.tracker.wf:7777/announce",
   "tracker:udp://explodie.org:6969/announce",
-  "tracker:udp://tracker.coppersurfer.tk:6969/announce"
+  "tracker:udp://tracker.coppersurfer.tk:6969/announce",
+  "tracker:udp://open.tracker.cl:1337/announce"
 ];
 
 const PACKS_ONE_PIECE = [
-  { start: 1,   end: 100, infoHash: "7F0FE0C9E39958D7D01ECA479717355EFE37DB4A" },
-  { start: 101, end: 200, infoHash: "3960037D0F814CB07D6F687468277C465E7331A3" },
-  { start: 201, end: 300, infoHash: "605E1890CF165635001A8193C1AC3D932F4457FD" },
-  { start: 301, end: 400, infoHash: "EF5A82E95B9BCECE9EA5AE54788EBFD3688A0F44" },
-  { start: 401, end: 500, infoHash: "E1BAEAB42BA30FCFD0095462757885046B892DE5" },
-  { start: 501, end: 600, infoHash: "1905E121F050EC114861EBCE852BF875DC1F5C99" },
-  { start: 601, end: 650, infoHash: "ADA74247D502AD771FF469DEF10A8AAA9B15B41B" },
-  { start: 651, end: 700, infoHash: "C8DD221A1792F7DEA8417F12DB753E90C9E05B09" },
+  { start: 1,   end: 100, infoHash: "7F0FE0C9E39958D7D01ECA479717355EFE37DB4A", sourceName: "TPB VF" },
+  { start: 101, end: 200, infoHash: "3960037D0F814CB07D6F687468277C465E7331A3", sourceName: "TPB VF" },
+  { start: 201, end: 300, infoHash: "605E1890CF165635001A8193C1AC3D932F4457FD", sourceName: "TPB VF" },
+  { start: 301, end: 400, infoHash: "EF5A82E95B9BCECE9EA5AE54788EBFD3688A0F44", sourceName: "TPB VF" },
+  { start: 401, end: 500, infoHash: "E1BAEAB42BA30FCFD0095462757885046B892DE5", sourceName: "TPB VF" },
+  { start: 501, end: 600, infoHash: "1905E121F050EC114861EBCE852BF875DC1F5C99", sourceName: "TPB VF" },
+  { start: 601, end: 650, infoHash: "ADA74247D502AD771FF469DEF10A8AAA9B15B41B", sourceName: "TPB VF" },
+  { start: 651, end: 700, infoHash: "C8DD221A1792F7DEA8417F12DB753E90C9E05B09", sourceName: "TPB VF" },
 
-  // Nouveau pack Nyaa (ex. 93 à 130) :
+  // Pack Nyaa (épisodes 93 à 130)
   { start: 93,  end: 130, infoHash: "cbdd80c1b2251e471a30408402afae7bdaf0c554", sourceName: "Nyaa VF" }
 ];
 
@@ -50,33 +52,40 @@ async function initOnePieceMapping() {
     const data = await res.json();
     let episodes = data.meta.videos;
 
-    // 1. Élimination des hors-séries (saison 0)
+    // 1. Élimination des épisodes hors-série
     episodes = episodes.filter(ep => ep.season > 0);
 
-    // 2. Tri chronologique strict par saison puis par numéro d'épisode
+    // 2. Tri chronologique rigoureux
     episodes.sort((a, b) => {
       if (a.season !== b.season) return a.season - b.season;
       return a.episode - b.episode;
     });
 
-    // 3. Attribution du numéro d'épisode absolu (1 à 700)
+    // 3. Attribution des flux (supporte plusieurs packs par épisode)
     episodes.forEach((ep, index) => {
       const episodeNum = index + 1;
       if (episodeNum > 700) return;
 
-      const pack = PACKS_ONE_PIECE.find(p => episodeNum >= p.start && episodeNum <= p.end);
-      if (pack) {
+      const matchingPacks = PACKS_ONE_PIECE.filter(p => episodeNum >= p.start && episodeNum <= p.end);
+
+      matchingPacks.forEach(pack => {
         const fileIdx = episodeNum - pack.start;
 
-        library.series[ep.id] = {
+        if (!library.series[ep.id]) {
+          library.series[ep.id] = [];
+        }
+
+        library.series[ep.id].push({
+          name: pack.sourceName,
+          title: `One Piece - Épisode ${episodeNum} (VF)\nDirect P2P [${pack.sourceName}]`,
           infoHash: pack.infoHash.toLowerCase(),
           fileIdx: fileIdx,
-          title: `One Piece - Épisode ${episodeNum} (VF)`
-        };
-      }
+          sources: DEFAULT_TRACKERS
+        });
+      });
     });
 
-    console.log(`Mapping terminé : ${Object.keys(library.series).length} épisodes synchronisés dans l'ordre.`);
+    console.log(`Mapping terminé : ${Object.keys(library.series).length} épisodes prêts avec multi-sources.`);
   } catch (err) {
     console.error("Erreur lors de la synchronisation :", err);
   }
@@ -88,25 +97,15 @@ app.get("/manifest.json", (req, res) => {
 
 app.get("/stream/:type/:id.json", (req, res) => {
   const { type, id } = req.params;
-  const item = library[type]?.[id];
+  const items = library[type]?.[id];
 
-  if (!item) {
+  if (!items || items.length === 0) {
     return res.json({ streams: [] });
   }
 
+  // Renvoie un tableau contenant tous les flux disponibles pour cet épisode
   res.json({
-    streams: [
-      {
-        name: "TPB VF",
-        title: `${item.title}\nDirect P2P`,
-        infoHash: item.infoHash,
-        fileIdx: item.fileIdx,
-        sources: [
-          `dht:${item.infoHash}`,
-          ...DEFAULT_TRACKERS
-        ]
-      }
-    ]
+    streams: Array.isArray(items) ? items : [items]
   });
 });
 
