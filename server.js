@@ -4,10 +4,9 @@ const app = express();
 
 app.use(cors());
 
-// Manifeste officiel de l'extension
 const manifest = {
   id: "community.perso.torrents",
-  version: "1.0.0",
+  version: "1.0.1",
   name: "Catalogue Perso",
   description: "Lecture directe des torrents sans debrid",
   resources: ["stream"],
@@ -15,9 +14,16 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// =========================================================================
-// 1. LISTE DES PACKS ONE PIECE (ÉPISODES 1 À 700)
-// =========================================================================
+// Liste des trackers BitTorrent publics pour trouver les seeders immédiatement
+const DEFAULT_TRACKERS = [
+  "tracker:udp://tracker.opentrackr.org:1337/announce",
+  "tracker:udp://open.demonii.com:1337/announce",
+  "tracker:udp://open.stealth.si:80/announce",
+  "tracker:udp://tracker.torrent.eu.org:451/announce",
+  "tracker:udp://explodie.org:6969/announce",
+  "tracker:udp://tracker.coppersurfer.tk:6969/announce"
+];
+
 const PACKS_ONE_PIECE = [
   { start: 1,   end: 100, infoHash: "7F0FE0C9E39958D7D01ECA479717355EFE37DB4A" },
   { start: 101, end: 200, infoHash: "3960037D0F814CB07D6F687468277C465E7331A3" },
@@ -29,52 +35,50 @@ const PACKS_ONE_PIECE = [
   { start: 651, end: 700, infoHash: "C8DD221A1792F7DEA8417F12DB753E90C9E05B09" }
 ];
 
-// =========================================================================
-// 2. BIBLIOTHÈQUE POUR AJOUTS MANUELS (FILMS OU AUTRES SÉRIES)
-// =========================================================================
 const library = {
-  movie: {
-    // Exemple : "tt0137523": { infoHash: "...", fileIdx: 0, title: "Fight Club" }
-  },
+  movie: {},
   series: {}
 };
 
-// =========================================================================
-// 3. SYNCHRONISATION AUTOMATIQUE AVEC LE CATALOGUE OFFICIEL STREMIO
-// =========================================================================
 async function initOnePieceMapping() {
   try {
-    console.log("Synchronisation des épisodes One Piece avec Stremio...");
+    console.log("Synchronisation et tri des épisodes...");
     const res = await fetch("https://v3-cinemeta.strem.io/meta/series/tt0388629.json");
     const data = await res.json();
-    const episodes = data.meta.videos;
+    let episodes = data.meta.videos;
 
+    // 1. Élimination des hors-séries (saison 0)
+    episodes = episodes.filter(ep => ep.season > 0);
+
+    // 2. Tri chronologique strict par saison puis par numéro d'épisode
+    episodes.sort((a, b) => {
+      if (a.season !== b.season) return a.season - b.season;
+      return a.episode - b.episode;
+    });
+
+    // 3. Attribution du numéro d'épisode absolu (1 à 700)
     episodes.forEach((ep, index) => {
       const episodeNum = index + 1;
       if (episodeNum > 700) return;
 
       const pack = PACKS_ONE_PIECE.find(p => episodeNum >= p.start && episodeNum <= p.end);
       if (pack) {
-        // fileIdx suit l'ordre des fichiers dans le torrent (commence à 0)
         const fileIdx = episodeNum - pack.start;
 
         library.series[ep.id] = {
-          infoHash: pack.infoHash,
+          infoHash: pack.infoHash.toLowerCase(),
           fileIdx: fileIdx,
           title: `One Piece - Épisode ${episodeNum} (VF)`
         };
       }
     });
 
-    console.log(`Mapping terminé : ${Object.keys(library.series).length} épisodes prêts.`);
+    console.log(`Mapping terminé : ${Object.keys(library.series).length} épisodes synchronisés dans l'ordre.`);
   } catch (err) {
-    console.error("Erreur lors de la récupération des épisodes :", err);
+    console.error("Erreur lors de la synchronisation :", err);
   }
 }
 
-// =========================================================================
-// 4. ROUTES STREMIO
-// =========================================================================
 app.get("/manifest.json", (req, res) => {
   res.json(manifest);
 });
@@ -93,15 +97,16 @@ app.get("/stream/:type/:id.json", (req, res) => {
         name: "TPB VF",
         title: `${item.title}\nDirect P2P`,
         infoHash: item.infoHash,
-        fileIdx: item.fileIdx
+        fileIdx: item.fileIdx,
+        sources: [
+          `dht:${item.infoHash}`,
+          ...DEFAULT_TRACKERS
+        ]
       }
     ]
   });
 });
 
-// =========================================================================
-// 5. DÉMARRAGE DU SERVEUR
-// =========================================================================
 const PORT = process.env.PORT || 7000;
 app.listen(PORT, async () => {
   await initOnePieceMapping();
