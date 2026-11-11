@@ -5,129 +5,143 @@ const app = express();
 app.use(cors());
 
 const manifest = {
-  id: "community.perso.torrents",
-  version: "1.0.5",
-  name: "Catalogue Perso",
-  description: "Lecture directe des torrents sans debrid",
+  id: "community.perso.onepiece",
+  version: "1.2.1",
+  name: "Catalogue Perso (IPTV)",
+  description: "One Piece VF direct HTTP via Portal",
   resources: ["stream"],
-  types: ["movie", "series"],
+  types: ["series"],
   idPrefixes: ["tt"]
 };
 
 // =========================================================================
-// TRACKERS & SOURCES
+// TABLES DE DÉCOUPAGE CORRIGÉES
 // =========================================================================
-const TRACKER_YGG = "tracker:https://tracker.yggreborn.org/807e922cd4cb90f9809126e50420e71c/announce";
-
-const DEFAULT_TRACKERS = [
-  "tracker:udp://tracker.opentrackr.org:1337/announce",
-  "tracker:udp://open.demonii.com:1337/announce",
-  "tracker:udp://open.stealth.si:80/announce",
-  "tracker:udp://tracker.torrent.eu.org:451/announce",
-  "tracker:http://nyaa.tracker.wf:7777/announce",
-  "tracker:udp://explodie.org:6969/announce",
-  "tracker:udp://tracker.coppersurfer.tk:6969/announce",
-  "tracker:udp://open.tracker.cl:1337/announce"
+const STREMIO_SEASONS = [
+  8, 22, 17, 13, 9, 22, 39, 13, 52, 31, 
+  99, 56, 100, 35, 62, 49, 118, 33, 98, 14, 
+  194, 70, 25
 ];
 
-const library = {
-  movie: {},
-  series: {}
+const IPTV_SEASONS = [
+  64, 16, 14, 39, 13, 52, 33, 35, 73, 45, 
+  26, 14, 37, 57, 62, 50, 118, 36, 92, 14, 
+  204, 7
+];
+
+function mapStremioToIptv(stremioSeason, stremioEpisode) {
+  const sNum = parseInt(stremioSeason, 10);
+  const epNum = parseInt(stremioEpisode, 10);
+
+  // 1. Calcul de l'épisode global
+  let absoluteNumber = 0;
+  for (let i = 0; i < sNum - 1 && i < STREMIO_SEASONS.length; i++) {
+    absoluteNumber += STREMIO_SEASONS[i];
+  }
+  absoluteNumber += epNum;
+
+  // 2. Décomposition selon les blocs IPTV
+  let remaining = absoluteNumber;
+  let iptvSeason = 1;
+  let iptvEpisode = 1;
+
+  for (let i = 0; i < IPTV_SEASONS.length; i++) {
+    if (remaining <= IPTV_SEASONS[i]) {
+      iptvSeason = i + 1;
+      iptvEpisode = remaining;
+      break;
+    }
+    remaining -= IPTV_SEASONS[i];
+  }
+
+  return {
+    season: iptvSeason,
+    episode: iptvEpisode,
+    absolute: absoluteNumber
+  };
+}
+
+// =========================================================================
+// CONFIGURATION DU PORTAIL STALKER
+// =========================================================================
+const PORTAL_URL = "http://nk.team-tx.st:80/portal.php";
+const MAC_ADDR = "00:1A:79:00:3D:E8";
+const TOKEN = "51D7CD0AF593647CBFBE42B532ED73AC";
+const SERIES_ID = 6051;
+
+const STB_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
+  "X-User-Agent": "Model: MAG250; Link: WiFi",
+  "Cookie": `mac=${encodeURIComponent(MAC_ADDR)}; stb_lang=en; timezone=Europe%2FParis;`,
+  "Authorization": `Bearer ${TOKEN}`
 };
 
 // =========================================================================
-// 1. TEST TECHNIQUE : L'ARÈNE (S01E01 - tt38234547)
+// GÉNÉRATION DU LIEN DE STREAMING EN DIRECT
 // =========================================================================
-library.series["tt38234547:1:1"] = [
-  {
-    name: "Test Ygg (HTTPS)",
-    title: "L'Arène S01E01 - 1080p VF\nTest Tracker HTTPS",
-    infoHash: "b94e808aae11b13fe9adbd14fcf400feb89ccee0".toLowerCase(),
-    fileIdx: 0,
-    sources: [
-      TRACKER_YGG,
-      ...DEFAULT_TRACKERS
-    ]
-  },
-  {
-    name: "Test Ygg (HTTP)",
-    title: "L'Arène S01E01 - 1080p VF\nTest Tracker HTTP",
-    infoHash: "b94e808aae11b13fe9adbd14fcf400feb89ccee0".toLowerCase(),
-    fileIdx: 0,
-    sources: [
-      "tracker:http://tracker.yggreborn.org/807e922cd4cb90f9809126e50420e71c/announce",
-      ...DEFAULT_TRACKERS
-    ]
-  }
-];
-
-// =========================================================================
-// 2. ONE PIECE (PACK YGG 1 À 1095)
-// =========================================================================
-const HASH_YGG_OP = "9d59b08cde8dfa97af361bfb13b2274885c18ac1".toLowerCase();
-
-async function initOnePieceMapping() {
+async function getLiveStreamUrl(iptvSeason, iptvEpisode) {
   try {
-    console.log("Synchronisation One Piece...");
-    const res = await fetch("https://v3-cinemeta.strem.io/meta/series/tt0388629.json");
-    const data = await res.json();
-    let episodes = data.meta.videos.filter(ep => ep.season > 0);
-
-    episodes.sort((a, b) => {
-      if (a.season !== b.season) return a.season - b.season;
-      return a.episode - b.episode;
+    const cmdPayload = JSON.stringify({
+      series_id: SERIES_ID,
+      season_num: iptvSeason,
+      type: "series"
     });
+    const cmdBase64 = Buffer.from(cmdPayload).toString("base64");
 
-    episodes.forEach((ep, index) => {
-      const episodeNum = index + 1;
-      if (episodeNum <= 1095) {
-        if (!library.series[ep.id]) {
-          library.series[ep.id] = [];
-        }
-        library.series[ep.id].push({
-          name: "Ygg 1080p VF",
-          title: `One Piece - Épisode ${episodeNum} (1080p Multi/VF)\nDirect P2P`,
-          infoHash: HASH_YGG_OP,
-          fileIdx: episodeNum - 1,
-          sources: [
-            TRACKER_YGG,
-            ...DEFAULT_TRACKERS
-          ]
-        });
-      }
-    });
-    console.log("Mapping One Piece prêt.");
+    const url = `${PORTAL_URL}?type=vod&action=create_link&cmd=${encodeURIComponent(cmdBase64)}&series=${iptvEpisode}&force_storage=0&disable_ad=0&download=0&force_ch_link_check=0&JsHttpRequest=1-xml`;
+
+    const response = await fetch(url, { headers: STB_HEADERS });
+    const data = await response.json();
+
+    if (data && data.js && data.js.cmd) {
+      return data.js.cmd.replace(/^ffmpeg\s+/, "");
+    }
   } catch (err) {
-    console.error("Erreur mapping One Piece :", err);
+    console.error("Erreur lors de la génération du lien :", err);
   }
+  return null;
 }
 
 // =========================================================================
 // ROUTES
 // =========================================================================
-app.get("/", (req, res) => {
-  res.redirect("/manifest.json");
-});
+app.get("/", (req, res) => res.redirect("/manifest.json"));
+app.get("/manifest.json", (req, res) => res.json(manifest));
 
-app.get("/manifest.json", (req, res) => {
-  res.json(manifest);
-});
-
-app.get("/stream/:type/:id.json", (req, res) => {
+app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
-  const items = library[type]?.[id];
 
-  if (!items || items.length === 0) {
-    return res.json({ streams: [] });
+  if (id.startsWith("tt0388629:")) {
+    const [, sSeason, sEpisode] = id.split(":");
+
+    const mapped = mapStremioToIptv(sSeason, sEpisode);
+    console.log(`Stremio S${sSeason}E${sEpisode} (Global #${mapped.absolute}) => IPTV S${mapped.season}E${mapped.episode}`);
+
+    const directUrl = await getLiveStreamUrl(mapped.season, mapped.episode);
+
+    if (directUrl) {
+      return res.json({
+        streams: [
+          {
+            name: "IPTV Direct VF",
+            title: `One Piece - Épisode ${mapped.absolute} (VF)\nDirect HTTP`,
+            url: directUrl,
+            behaviorHints: {
+              notWebReady: true,
+              proxyHeaders: {
+                request: {
+                  "User-Agent": "VLC/3.0.11.1 LibVLC/3.0.11.1"
+                }
+              }
+            }
+          }
+        ]
+      });
+    }
   }
 
-  res.json({
-    streams: Array.isArray(items) ? items : [items]
-  });
+  res.json({ streams: [] });
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, async () => {
-  await initOnePieceMapping();
-  console.log(`Serveur actif sur le port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
